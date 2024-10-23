@@ -14,6 +14,39 @@ print(f"Using device: {device}")
 import re
 from collections import Counter
 
+class NextWordLSTM(nn.Module):
+    def __init__(self, embed_size, hidden_size, num_layers, repetition_penalty=1.0):
+        super(NextWordLSTM, self).__init__()
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
+        self.repetition_penalty = repetition_penalty
+        
+        self.embedding = None
+        self.lstm = None
+        self.fc = None
+    
+    def initialize_vocab(self, vocab_size):
+        self.embedding = nn.Embedding(vocab_size, self.embed_size)
+        self.lstm = nn.LSTM(self.embed_size, self.hidden_size, self.num_layers, batch_first=True)
+        self.fc = nn.Linear(self.hidden_size, vocab_size)
+    
+    def forward(self, x):
+        if self.embedding is None or self.lstm is None or self.fc is None:
+            raise RuntimeError("Model not initialized. Call initialize_vocab() first.")
+        
+        x = self.embedding(x)
+        lstm_out, _ = self.lstm(x)
+        lstm_out = lstm_out[:, -1, :]  # Take the output of the last LSTM cell
+        out = self.fc(lstm_out)
+        
+        if self.repetition_penalty != 1.0:
+            for i in range(out.size(0)):
+                for token in x[i]:
+                    out[i, token] /= self.repetition_penalty
+        
+        return out
+
 def clean_text(text):
     text = text.lower().strip()
     text = re.sub(r'(.)\1+', r'\1\1', text)
@@ -30,11 +63,11 @@ nameslist = nameslist['name'].tolist()
 import json
 
 def read_old_model():
-    model = torch.load('model.pth')
+    model = torch.load('test.pth')
     return model
 
 def read_old_vocab():
-    with open('vocabulary.json', 'r') as f:
+    with open('test.json', 'r') as f:
         existing_vocab = json.load(f)
     return existing_vocab
 

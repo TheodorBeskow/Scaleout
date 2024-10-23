@@ -8,15 +8,28 @@ import threading
 
 import torch.nn as nn
 
+
 class NextWordLSTM(nn.Module):
-    def __init__(self, vocab_size, embed_size, hidden_size, num_layers, repetition_penalty=1.0):
+    def __init__(self, embed_size, hidden_size, num_layers, repetition_penalty=1.0):
         super(NextWordLSTM, self).__init__()
-        self.embedding = nn.Embedding(vocab_size, embed_size)
-        self.lstm = nn.LSTM(embed_size, hidden_size, num_layers, batch_first=True)
-        self.fc = nn.Linear(hidden_size, vocab_size)
+        self.embed_size = embed_size
+        self.hidden_size = hidden_size
+        self.num_layers = num_layers
         self.repetition_penalty = repetition_penalty
+        
+        self.embedding = None
+        self.lstm = None
+        self.fc = None
+    
+    def initialize_vocab(self, vocab_size):
+        self.embedding = nn.Embedding(vocab_size, self.embed_size)
+        self.lstm = nn.LSTM(self.embed_size, self.hidden_size, self.num_layers, batch_first=True)
+        self.fc = nn.Linear(self.hidden_size, vocab_size)
     
     def forward(self, x):
+        if self.embedding is None or self.lstm is None or self.fc is None:
+            raise RuntimeError("Model not initialized. Call initialize_vocab() first.")
+        
         x = self.embedding(x)
         lstm_out, _ = self.lstm(x)
         lstm_out = lstm_out[:, -1, :]  # Take the output of the last LSTM cell
@@ -66,8 +79,8 @@ def predict_next_word(model, sequence, idx_to_word):
 
 def load_model(model_type):
     global loaded_word_to_idx, loaded_model
-    model_load_path = f'model.pth'
-    vocab_load_path = f'vocabulary.json'
+    model_load_path = f'test.pth'
+    vocab_load_path = f'test.json'
 
     with open(vocab_load_path, 'r') as f:
         loaded_word_to_idx = json.load(f)
