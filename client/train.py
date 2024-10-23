@@ -5,14 +5,12 @@ from torch.utils.data import Dataset, DataLoader
 from sklearn.model_selection import train_test_split
 import os
 import pandas as pd
-
-# sys.path.append("..")
-# from functions import build_vocab, encode_sequences
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-print(f"Using device: {device}")
-
+import json
 import re
 from collections import Counter
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print(f"Using device: {device}")
 
 class NextWordLSTM(nn.Module):
     def __init__(self, embed_size, hidden_size, num_layers, repetition_penalty=1.0):
@@ -58,14 +56,6 @@ def clean_text(text):
 def tokenize_text(text):
     return clean_text(text).split()
 
-nameslist = pd.read_csv('names.csv')
-nameslist = nameslist['name'].tolist()
-import json
-
-def read_old_model():
-    model = torch.load('test.pth')
-    return model
-
 def read_old_vocab():
     with open('test.json', 'r') as f:
         existing_vocab = json.load(f)
@@ -78,15 +68,12 @@ def build_vocab(texts):
     all_words = [word for text in tokenized_texts for word in text if word.isalnum()]
     word_counts = Counter(all_words)
     
-    # Start with existing vocabulary
     word_to_idx = existing_vocab.copy()
     
-    # Add new words that didn't exist before
     for word in word_counts:
         if word not in word_to_idx:
             word_to_idx[word] = len(word_to_idx)
     
-    # Ensure special tokens are present
     special_tokens = ['<PAD>', '<UNK>', '[name]']
     for token in special_tokens:
         if token not in word_to_idx:
@@ -95,28 +82,23 @@ def build_vocab(texts):
     print(f"Vocabulary size: {len(word_to_idx)}")
     print(f"Added {len(word_to_idx) - len(existing_vocab)} new words to the vocabulary")
     
-    # Save updated vocabulary
     with open('vocabulary.json', 'w') as f:
         json.dump(word_to_idx, f)
 
     return word_to_idx, tokenized_texts
 
-def is_illegal_word(word):
+def is_illegal_word(word, word_to_idx):
     return any(char.isalnum() == False for char in word) or word not in word_to_idx
 
-def encode_sequences(tokenized_texts, word_to_idx, seq_length=6):
+def encode_sequences(tokenized_texts, word_to_idx, seq_length=1):
     sequences = []
+    unk_token = word_to_idx['<UNK>']
     for tokens in tokenized_texts:
-        if len(tokens) < seq_length:
-            continue
-        for i in range(seq_length, len(tokens)):
-            seq = tokens[i-seq_length:i] 
-            target = tokens[i]  
-            if any(is_illegal_word(word) for word in seq) or is_illegal_word(target):
-                continue
-            encoded_seq = [word_to_idx.get(word, word_to_idx['<UNK>']) for word in seq]
-            encoded_target = word_to_idx.get(target, word_to_idx['<UNK>'])
-            sequences.append((encoded_seq, encoded_target))
+        encoded_tokens = [word_to_idx.get(word, unk_token) for word in tokens]
+        for i in range(seq_length, len(encoded_tokens)):
+            seq = encoded_tokens[i-seq_length:i]
+            target = encoded_tokens[i]
+            sequences.append((seq, target))
     return sequences
 
 file_path = 'data/history.csv'
@@ -125,12 +107,14 @@ df = pd.read_csv(file_path)
 texts = []
 for _, row in df.iterrows():
     prompt = row['prompt']
-    response = row['response']
+
     text = prompt
     texts.append(text)
 print(f"Loaded {len(texts)} text samples from CSV.")
 
 word_to_idx, tokenized_texts = build_vocab(texts)
+print(f"Vocabulary size: {len(word_to_idx)}")
+print(word_to_idx)
 sequences = encode_sequences(tokenized_texts, word_to_idx, seq_length=4)
 
 print(f"Vocabulary size: {len(word_to_idx)}")
@@ -147,8 +131,14 @@ class TextDataset(Dataset):
         sequence, target = self.sequences[idx]
         return torch.tensor(sequence), torch.tensor(target)
 
-# Load the old model
-model = read_old_model()
+# Initialize a new model instead of loading the old one
+vocab_size = len(word_to_idx)
+embed_size = 128
+hidden_size = 256
+num_layers = 2
+
+model = NextWordLSTM(embed_size, hidden_size, num_layers)
+model.initialize_vocab(vocab_size)
 model = model.to(device)
 
 train_sequences, val_sequences = train_test_split(sequences, test_size=0.2, random_state=42)
@@ -214,15 +204,15 @@ def train_model(model, train_loader, val_loader, criterion, optimizer, num_epoch
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0  
-            best_model = model  
+            best_model = model.state_dict()  
         else:
             patience_counter += 1
             if patience_counter >= patience:
                 print("Early stopping triggered")
-                break
+            break
 
-    model = best_model
-    return train_losses, val_losses, val_accuracies
+        model.load_state_dict(best_model)
+        return train_losses, val_losses, val_accuracies
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
@@ -230,19 +220,16 @@ optimizer = optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-5)
 print("Starting training...")
 train_losses, val_losses, val_accuracies = train_model(model, train_loader, val_loader, criterion, optimizer, num_epochs=10)
 
-import json
-
 # Save the vocabulary (word_to_idx dictionary)
 vocab_save_path = 'vocabulary.json'
 with open(vocab_save_path, 'w') as f:
     json.dump(word_to_idx, f)
 print(f"Vocabulary saved to {vocab_save_path}")
 
-#save model
+# Save model
 model_save_path = 'model_low_vocab.pth'
-torch.save(model, model_save_path)
+torch.save(model.state_dict(), model_save_path)
 print(f"Model saved to {model_save_path}")
 
-
 if __name__ == '__main__':
-    train_model()
+    train_model(model, train_loader, val_loader, criterion, optimizer)
